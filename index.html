@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Teste Localizacao - Web</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background:#0d1117; color:#e6edf3; margin:0; padding:16px; }
+  h1 { font-size:1.3rem; }
+  label { display:block; margin-top:12px; font-size:0.85rem; color:#9da7b3; }
+  input { width:100%; box-sizing:border-box; padding:10px; margin-top:4px; border-radius:8px; border:1px solid #30363d; background:#161b22; color:#e6edf3; font-size:1rem; }
+  button { width:100%; padding:14px; margin-top:16px; border-radius:8px; border:none; font-size:1rem; font-weight:600; cursor:pointer; }
+  #sendBtn { background:#3b82f6; color:white; }
+  #saveBtn { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
+  .ok { color:#3fb950; }
+  .err { color:#f85149; }
+  #log { margin-top:16px; font-size:0.85rem; }
+  .entry { padding:8px; border-bottom:1px solid #21262d; }
+  .deviceid { font-size:0.75rem; color:#6e7681; margin-top:8px; word-break:break-all; }
+</style>
+</head>
+<body>
+  <h1>Teste de Localizacao (Web)</h1>
+  <p class="deviceid">device_id: <span id="deviceIdLabel"></span></p>
+
+  <label>URL do ingestor</label>
+  <input id="url" type="text" placeholder="https://ingestor-cade-tu.onrender.com">
+
+  <label>API key</label>
+  <input id="apiKey" type="text" placeholder="">
+
+  <label>user_id</label>
+  <input id="userId" type="text" placeholder="usr_exemplo">
+
+  <label>group_id</label>
+  <input id="groupId" type="text" placeholder="grp_familia01">
+
+  <button id="saveBtn">Salvar configuracao</button>
+  <button id="sendBtn">Enviar localizacao agora</button>
+
+  <div id="log"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+
+  function getOrCreateDeviceId() {
+    let id = localStorage.getItem('device_id');
+    if (!id) {
+      id = 'dev_web_' + crypto.randomUUID().slice(0, 8);
+      localStorage.setItem('device_id', id);
+    }
+    return id;
+  }
+
+  function nextSequence() {
+    let seq = parseInt(localStorage.getItem('sequence') || '0', 10);
+    seq += 1;
+    localStorage.setItem('sequence', String(seq));
+    return seq;
+  }
+
+  function loadConfig() {
+    $('url').value = localStorage.getItem('ingestor_url') || '';
+    $('apiKey').value = localStorage.getItem('api_key') || '';
+    $('userId').value = localStorage.getItem('user_id') || '';
+    $('groupId').value = localStorage.getItem('group_id') || '';
+    $('deviceIdLabel').textContent = getOrCreateDeviceId();
+  }
+
+  function saveConfig() {
+    localStorage.setItem('ingestor_url', $('url').value.trim());
+    localStorage.setItem('api_key', $('apiKey').value.trim());
+    localStorage.setItem('user_id', $('userId').value.trim());
+    localStorage.setItem('group_id', $('groupId').value.trim());
+    logEntry(true, 'Configuracao salva');
+  }
+
+  function logEntry(ok, text) {
+    const div = document.createElement('div');
+    div.className = 'entry ' + (ok ? 'ok' : 'err');
+    const time = new Date().toLocaleTimeString('pt-BR');
+    div.textContent = '[' + time + '] ' + text;
+    $('log').prepend(div);
+  }
+
+  function normalizeUrl(u) {
+    u = u.trim();
+    if (u.endsWith('/')) u = u.slice(0, -1);
+    return u;
+  }
+
+  async function sendNow() {
+    const baseUrl = localStorage.getItem('ingestor_url') || '';
+    if (!baseUrl) {
+      logEntry(false, 'Configure a URL do ingestor e salve antes de enviar');
+      return;
+    }
+    if (!navigator.geolocation) {
+      logEntry(false, 'Geolocalizacao nao suportada neste navegador');
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const event = {
+        schema_version: '1.0',
+        event_id: crypto.randomUUID(),
+        event_type: 'location.update',
+        device_id: getOrCreateDeviceId(),
+        user_id: localStorage.getItem('user_id') || 'usr_desconhecido',
+        group_id: localStorage.getItem('group_id') || 'grp_default',
+        sequence: nextSequence(),
+        captured_at: new Date().toISOString(),
+        payload: {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy_m: pos.coords.accuracy,
+          altitude_m: pos.coords.altitude,
+          speed_mps: pos.coords.speed,
+          heading_deg: pos.coords.heading,
+          provider: 'fused',
+          app_state: 'foreground'
+        }
+      };
+
+      try {
+        const headers = { 'Content-Type': 'application/json' };
+        const apiKey = localStorage.getItem('api_key') || '';
+        if (apiKey) headers['X-API-Key'] = apiKey;
+
+        const resp = await fetch(normalizeUrl(baseUrl) + '/v1/locations', {
+          method: 'POST',
+          headers: headers,
+          body: JSON.stringify(event)
+        });
+        const text = await resp.text();
+        logEntry(resp.status === 202, 'HTTP ' + resp.status + ': ' + text.slice(0, 140));
+      } catch (e) {
+        logEntry(false, 'Falha de rede: ' + e.message);
+      }
+    }, (err) => {
+      logEntry(false, 'Erro de GPS: ' + err.message);
+    }, { enableHighAccuracy: true, timeout: 10000 });
+  }
+
+  $('saveBtn').addEventListener('click', saveConfig);
+  $('sendBtn').addEventListener('click', sendNow);
+  loadConfig();
+</script>
+</body>
+</html>
