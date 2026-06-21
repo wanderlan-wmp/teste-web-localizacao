@@ -4,19 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Teste Localizacao - Web</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; background:#0d1117; color:#e6edf3; margin:0; padding:16px; }
   h1 { font-size:1.3rem; }
+  h2 { font-size:1.05rem; margin-top:28px; }
   label { display:block; margin-top:12px; font-size:0.85rem; color:#9da7b3; }
   input { width:100%; box-sizing:border-box; padding:10px; margin-top:4px; border-radius:8px; border:1px solid #30363d; background:#161b22; color:#e6edf3; font-size:1rem; }
   button { width:100%; padding:14px; margin-top:16px; border-radius:8px; border:none; font-size:1rem; font-weight:600; cursor:pointer; }
   #sendBtn { background:#3b82f6; color:white; }
-  #saveBtn { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
+  #saveBtn, #refreshMapBtn { background:#21262d; color:#e6edf3; border:1px solid #30363d; }
   .ok { color:#3fb950; }
   .err { color:#f85149; }
   #log { margin-top:16px; font-size:0.85rem; }
   .entry { padding:8px; border-bottom:1px solid #21262d; }
   .deviceid { font-size:0.75rem; color:#6e7681; margin-top:8px; word-break:break-all; }
+  #groupMap { height: 300px; border-radius: 8px; margin-top: 12px; }
+  #memberList { margin-top: 12px; font-size: 0.85rem; }
+  .member-row { padding: 6px 0; border-bottom: 1px solid #21262d; }
 </style>
 </head>
 <body>
@@ -40,6 +45,12 @@
 
   <div id="log"></div>
 
+  <h2>Mapa do grupo</h2>
+  <div id="groupMap"></div>
+  <button id="refreshMapBtn">Atualizar mapa</button>
+  <div id="memberList"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
   const $ = (id) => document.getElementById(id);
 
@@ -142,9 +153,81 @@
     }, { enableHighAccuracy: true, timeout: 10000 });
   }
 
+  // ---------------------------------------------------------------------
+  // Mapa do grupo
+  // ---------------------------------------------------------------------
+  let _map = null;
+  const _markers = {}; // key: user_id
+
+  function ensureMap() {
+    if (_map) return _map;
+    _map = L.map('groupMap').setView([-9.6498, -35.7089], 13); // Maceio como fallback
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap'
+    }).addTo(_map);
+    return _map;
+  }
+
+  async function refreshMap() {
+    const baseUrl = localStorage.getItem('ingestor_url') || '';
+    const groupId = localStorage.getItem('group_id') || '';
+    if (!baseUrl || !groupId) {
+      logEntry(false, 'Configure e salve URL do ingestor + group_id antes de atualizar o mapa');
+      return;
+    }
+
+    const map = ensureMap();
+    const apiKey = localStorage.getItem('api_key') || '';
+    const headers = {};
+    if (apiKey) headers['X-API-Key'] = apiKey;
+
+    try {
+      const resp = await fetch(normalizeUrl(baseUrl) + '/v1/groups/' + encodeURIComponent(groupId) + '/locations', { headers });
+      if (!resp.ok) {
+        logEntry(false, 'Erro ao buscar mapa: HTTP ' + resp.status);
+        return;
+      }
+      const members = await resp.json();
+      $('memberList').innerHTML = '';
+
+      if (members.length === 0) {
+        logEntry(false, 'Nenhum membro encontrado ainda neste group_id');
+        return;
+      }
+
+      const bounds = [];
+      members.forEach((m) => {
+        const latlng = [m.lat, m.lng];
+        bounds.push(latlng);
+
+        if (_markers[m.user_id]) {
+          _markers[m.user_id].setLatLng(latlng);
+        } else {
+          _markers[m.user_id] = L.marker(latlng).addTo(map);
+        }
+        _markers[m.user_id].bindPopup(m.user_id + '<br>' + new Date(m.captured_at).toLocaleTimeString('pt-BR'));
+
+        const row = document.createElement('div');
+        row.className = 'member-row';
+        row.textContent = m.user_id + ' - atualizado ' + new Date(m.captured_at).toLocaleTimeString('pt-BR');
+        $('memberList').appendChild(row);
+      });
+
+      if (bounds.length > 0) {
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+      }
+
+      logEntry(true, 'Mapa atualizado: ' + members.length + ' membro(s)');
+    } catch (e) {
+      logEntry(false, 'Falha de rede ao atualizar mapa: ' + e.message);
+    }
+  }
+
   $('saveBtn').addEventListener('click', saveConfig);
   $('sendBtn').addEventListener('click', sendNow);
+  $('refreshMapBtn').addEventListener('click', refreshMap);
   loadConfig();
+  ensureMap();
 </script>
 </body>
 </html>
